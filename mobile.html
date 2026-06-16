@@ -32,12 +32,6 @@
   header .sp{flex:1;}
   .icon-btn{background:var(--card);border:1px solid var(--line);color:var(--text);width:36px;height:36px;
     border-radius:50%;font-size:15px;display:flex;align-items:center;justify-content:center;cursor:pointer;}
-  /* fav sheet */
-  .fav-pop{display:none;padding:10px 14px;border-bottom:1px solid var(--line);background:var(--bg-soft);}
-  .fav-pop.show{display:flex;gap:8px;align-items:center;}
-  .fav-pop label{color:var(--muted);font-size:13px;}
-  .fav-pop input{flex:1;background:var(--card);border:1px solid var(--line);color:var(--text);
-    border-radius:10px;padding:9px 12px;font-size:15px;outline:none;}
   /* views */
   main{padding:14px 14px calc(78px + env(safe-area-inset-bottom));min-height:60vh;}
   .view{display:none;animation:fade .2s ease;}
@@ -177,11 +171,8 @@
   <button class="icon-btn" id="favBtn" title="My team">★</button>
   <button class="icon-btn" id="refBtn" title="Refresh">↻</button>
 </header>
-<div class="fav-pop" id="favPop">
-  <label>★ My team</label>
-  <input id="favInput" list="teamlist" placeholder="type a team…" autocomplete="off" />
-  <datalist id="teamlist"></datalist>
-</div>
+<datalist id="teamlist"></datalist>   <!-- options for the My Team selector -->
+
 
 <main id="main">
   <div class="view active" id="v-matches"></div>
@@ -531,7 +522,6 @@ function openMyTeam(){
 
 /* ---- init ---- */
 async function init(){
-  favInput.value=fav;
   try{
     await loadData();
     renderActive();
