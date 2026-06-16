@@ -55,6 +55,7 @@ const TS = x => { const d = toDate(x); return d ? d.getTime() : 0; };
 // fields, so a hostile name from the feed can never inject markup.
 const ESC_MAP = { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" };
 const esc = s => s==null ? "" : String(s).replace(/[&<>"']/g, c => ESC_MAP[c]);
+const arr = v => Array.isArray(v) ? v : [];   // defensive: coerce non-arrays to [] before iterating
 
 function crest(name, lg){
   name = name==null ? "" : String(name);           // tolerate non-string input
@@ -93,6 +94,7 @@ const STAGE = {
   "final":        { label:"Final",         ko:true,  order:6 }
 };
 function normalizeEspn(ev){
+  ev = ev || {};
   const comp = (ev.competitions||[])[0] || {};
   const cs = comp.competitors || [];
   const h = cs.find(c=>c.homeAway==="home") || cs[0] || {};
@@ -144,16 +146,134 @@ async function loadData(){
   FIXTURES.forEach(m=>{ if(m.homeBadge) TEAM_BADGE[m.home]=m.homeBadge; if(m.awayBadge) TEAM_BADGE[m.away]=m.awayBadge; });
   try { await loadStandings(); } catch(_){ /* matches still work even if standings hiccups */ }
   TEAMS = [...new Set([...FIXTURES.flatMap(m=>[m.home,m.away]), ...GROUPS.flatMap(g=>g.teams.map(t=>t.team))].filter(Boolean))].sort();
+  LAST_UPDATED = Date.now(); FROM_CACHE = false; saveSnapshot();   // remember this good load for instant/offline launch
+}
+
+// ---- Offline snapshot (stale-while-revalidate) ------------------------------
+// Persist the last good core dataset so the next launch paints instantly and the
+// app still works with no network. Real data, timestamped — never fabricated.
+const SNAP_KEY = "wc:snapshot";
+let LAST_UPDATED = 0;     // epoch ms of the last successful live load
+let FROM_CACHE = false;   // true while the data on screen came from the offline snapshot
+function saveSnapshot(){
+  try{
+    localStorage.setItem(SNAP_KEY, JSON.stringify({
+      ts: LAST_UPDATED, fixtures: FIXTURES, groups: GROUPS,
+      teamOfGroup: TEAM_OF_GROUP, teamBadge: TEAM_BADGE, teams: TEAMS
+    }));
+  }catch(_){}
+}
+function loadSnapshot(){
+  try{
+    const raw = localStorage.getItem(SNAP_KEY); if(!raw) return false;
+    const s = JSON.parse(raw);
+    if(!s || !Array.isArray(s.fixtures) || !s.fixtures.length) return false;
+    FIXTURES = s.fixtures; GROUPS = s.groups || []; TEAM_OF_GROUP = s.teamOfGroup || {};
+    TEAM_BADGE = s.teamBadge || {}; TEAMS = s.teams || [];
+    LAST_UPDATED = s.ts || 0; FROM_CACHE = true;
+    return true;
+  }catch(_){ return false; }
+}
+
+// ---- Live-aware refresh cadence ---------------------------------------------
+const anyLive = () => FIXTURES.some(m => m.status === "live");
+const nextRefreshMs = () => anyLive() ? 30000 : 180000;   // poll fast only while a match is live
+
+// ---- Calendar export (.ics) -------------------------------------------------
+// Build a real iCalendar event (kickoff + venue) for a fixture. Client-side only.
+const unesc = s => String(s==null?"":s).replace(/&amp;/g,"&").replace(/&lt;/g,"<").replace(/&gt;/g,">").replace(/&quot;/g,'"').replace(/&#39;/g,"'");
+const icsStamp = d => d.getUTCFullYear() + String(d.getUTCMonth()+1).padStart(2,"0") + String(d.getUTCDate()).padStart(2,"0")
+  + "T" + String(d.getUTCHours()).padStart(2,"0") + String(d.getUTCMinutes()).padStart(2,"0") + "00Z";
+const icsEscape = s => String(s==null?"":s).replace(/([,;\\])/g,"\\$1").replace(/\n/g,"\\n");
+function icsForMatch(m){
+  const start = toDate(m.date); if(!start) return null;
+  const end = new Date(start.getTime() + 2*60*60*1000);   // ~2 hours
+  const title = unesc(m.home) + " vs " + unesc(m.away) + (m.stage ? " (" + unesc(m.stage) + ")" : "");
+  const loc = [unesc(m.venue), unesc(m.country)].filter(Boolean).join(", ");
+  const uid = "wc2026-" + (m.id || Math.random().toString(36).slice(2)) + "@worldcup";
+  return [
+    "BEGIN:VCALENDAR","VERSION:2.0","PRODID:-//World Cup 2026 Dashboard//EN","CALSCALE:GREGORIAN",
+    "BEGIN:VEVENT","UID:" + uid,"DTSTAMP:" + icsStamp(new Date()),
+    "DTSTART:" + icsStamp(start),"DTEND:" + icsStamp(end),
+    "SUMMARY:" + icsEscape(title), loc ? "LOCATION:" + icsEscape(loc) : "",
+    "DESCRIPTION:" + icsEscape("FIFA World Cup 2026"),
+    "END:VEVENT","END:VCALENDAR"
+  ].filter(Boolean).join("\r\n");
+}
+function downloadIcs(m){
+  const ics = icsForMatch(m); if(!ics) return;
+  const url = URL.createObjectURL(new Blob([ics], { type:"text/calendar;charset=utf-8" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = (unesc(m.home) + "-vs-" + unesc(m.away) + ".ics").replace(/[^\w.-]+/g,"_");
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=> URL.revokeObjectURL(url), 1000);
+}
+
+// ---- Match & goal alerts (opt-in, foreground) -------------------------------
+// Detection is a PURE function (testable): it diffs the current fav-team matches
+// against the last-seen state and returns the alerts to fire. First observation
+// of a match only seeds state — never alerts — so enabling/reloading is silent.
+const NOTIFY_KEY = "wc:notify";          // "on" | absent
+const NOTIFY_STATE_KEY = "wc:notifystate";
+function computeAlerts(matches, favName, state){
+  const prev = state || {};
+  const next = {};                       // rebuilt fresh -> only current fav matches (bounded)
+  const alerts = [];
+  const isF = n => favName && n && String(n).toLowerCase() === String(favName).toLowerCase();
+  (Array.isArray(matches) ? matches : []).forEach(m=>{
+    if(!m || !(isF(m.home) || isF(m.away))) return;
+    const score = (m.hs==null?0:m.hs) + "-" + (m.as==null?0:m.as);
+    next[m.id] = { status:m.status, score };
+    const p = prev[m.id];
+    if(!p) return;                        // seed only on first sight
+    const line = `${unesc(m.home)} ${m.hs==null?"":m.hs} – ${m.as==null?"":m.as} ${unesc(m.away)}`;
+    if(p.status !== "live" && m.status === "live")
+      alerts.push({ tag:"k"+m.id, title:"🟢 Kick-off", body:`${unesc(m.home)} vs ${unesc(m.away)}` });
+    else if(p.status === "live" && m.status === "live" && p.score !== score)
+      alerts.push({ tag:"g"+m.id+score, title:"⚽ GOAL", body:line });
+    else if(p.status !== "ft" && m.status === "ft")
+      alerts.push({ tag:"f"+m.id, title:"⏱ Full time", body:line });
+  });
+  return { alerts, state: next };
+}
+const notifySupported = () => typeof Notification !== "undefined";
+const notifyOn = () => { try{ return localStorage.getItem(NOTIFY_KEY) === "on"; }catch(_){ return false; } };
+function loadNotifyState(){ try{ return JSON.parse(localStorage.getItem(NOTIFY_STATE_KEY)) || {}; }catch(_){ return {}; } }
+function saveNotifyState(s){ try{ localStorage.setItem(NOTIFY_STATE_KEY, JSON.stringify(s||{})); }catch(_){} }
+async function enableNotifications(){
+  if(!notifySupported()) return false;
+  let perm = Notification.permission;
+  if(perm === "default"){ try{ perm = await Notification.requestPermission(); }catch(_){ perm = "denied"; } }
+  if(perm !== "granted") return false;
+  saveNotifyState(computeAlerts(FIXTURES, fav, {}).state);   // seed silently so we don't alert on already-running matches
+  try{ localStorage.setItem(NOTIFY_KEY, "on"); }catch(_){}
+  return true;
+}
+function disableNotifications(){ try{ localStorage.removeItem(NOTIFY_KEY); }catch(_){} }
+function fireAlerts(alerts){
+  if(!notifySupported() || Notification.permission !== "granted") return;
+  alerts.forEach(a=>{
+    const opts = { body:a.body, tag:a.tag, icon:"icon-192.png", badge:"icon-192.png" };
+    if(navigator.serviceWorker && navigator.serviceWorker.ready)
+      navigator.serviceWorker.ready.then(r=> r.showNotification(a.title, opts)).catch(()=>{ try{ new Notification(a.title, opts); }catch(_){} });
+    else { try{ new Notification(a.title, opts); }catch(_){} }
+  });
+}
+function maybeNotify(){
+  if(!notifyOn() || !notifySupported() || Notification.permission !== "granted") return;
+  const { alerts, state } = computeAlerts(FIXTURES, fav, loadNotifyState());
+  saveNotifyState(state);
+  if(alerts.length) fireAlerts(alerts);
 }
 
 // Flatten an ESPN match summary's rosters into per-player records (real names +
 // per-match stats: goals, cards, shots…). The backbone of scorers + players.
 function espnRosterPlayers(sum){
   const out = [];
-  (sum.rosters||[]).forEach(r=>{
+  arr(sum.rosters).forEach(r=>{
     const team = esc((r.team||{}).displayName);
-    (r.roster||[]).forEach(p=>{
-      const st = {}; (p.stats||[]).forEach(s=> st[s.name] = s.value);
+    arr(r.roster).forEach(p=>{
+      const st = {}; arr(p.stats).forEach(s=> st[s.name] = s.value);
       const ath = p.athlete || {};
       out.push({
         id: ath.id, name: esc(ath.displayName), team,
@@ -169,15 +289,15 @@ function espnRosterPlayers(sum){
 async function loadScorers(){
   const finished = FIXTURES.filter(m=>m.status === "ft").slice(0, 120);
   const tally = {};
-  await Promise.all(finished.map(async m=>{
-    const sum = await espnSummary(m.id); if(!sum) return;
+  await mapLimit(finished, MATCH_FETCH_LIMIT, async m=>{
+    const sum = await matchDetail(m); if(!sum) return;
     espnRosterPlayers(sum).forEach(p=>{
       if(!p.goals || !p.name) return;
       const key = p.id || (p.name+"|"+p.team);
       const e = (tally[key] = tally[key] || { name:p.name, team:p.team, goals:0, id:p.id });
       e.goals += p.goals;
     });
-  }));
+  });
   SCORERS = Object.values(tally).sort((a,b)=> b.goals - a.goals || a.name.localeCompare(b.name)).slice(0, 30);
 }
 
@@ -220,8 +340,8 @@ async function loadStats(){
   const cards={}, shots={};
   let pens=0, openPlay=0, ownGoals=0, subs=0;
   const bands=[0,0,0,0,0,0];   // goal minute: 1-15, 16-30, 31-45, 46-60, 61-75, 76-90+
-  await Promise.all(finished.map(async m=>{
-    const sum = await espnSummary(m.id); if(!sum) return;
+  await mapLimit(finished, MATCH_FETCH_LIMIT, async m=>{
+    const sum = await matchDetail(m); if(!sum) return;
     (sum.keyEvents||[]).forEach(e=>{
       const t = ((e.type||{}).text||"").toLowerCase();
       // ESPN labels: "Goal", "Goal - Header/Volley", "Own Goal", "Penalty - Scored".
@@ -241,7 +361,7 @@ async function loadStats(){
       const c=(cards[name]=cards[name]||{Y:0,R:0});
       c.Y+=st.yellowCards||0; c.R+=st.redCards||0;
     });
-  }));
+  });
 
   // venues + hosts (from all loaded fixtures)
   const venues={}, hosts={};
@@ -294,12 +414,13 @@ async function mapLimit(items, limit, fn){
   });
   await Promise.all(workers);
 }
+const MATCH_FETCH_LIMIT = 6;   // cap concurrent ESPN summary fetches (avoid a ~120-request burst)
 
 async function loadPlayers(){
   const finished = FIXTURES.filter(m=>m.status === "ft").slice(0, 120);
   const reg = {};
-  await Promise.all(finished.map(async m=>{
-    const sum = await espnSummary(m.id); if(!sum) return;
+  await mapLimit(finished, MATCH_FETCH_LIMIT, async m=>{
+    const sum = await matchDetail(m); if(!sum) return;
     espnRosterPlayers(sum).forEach(p=>{
       if(!p.id) return;
       const e = reg[p.id] = reg[p.id] || { id:p.id, name:p.name, nat:p.team, goals:0, yc:0, rc:0, assists:0, inXI:false, pos:p.pos, num:p.num };
@@ -309,7 +430,7 @@ async function loadPlayers(){
       if(p.pos && !e.pos) e.pos = p.pos;
       if(p.num && !e.num) e.num = p.num;
     });
-  }));
+  });
   PLAYERS = Object.values(reg);
 }
 
@@ -436,6 +557,53 @@ async function espnSummary(id){
   return ESPN_SUM_CACHE[id];
 }
 
+// Per-match detail with a persistent cache. A finished match is immutable, so we slim
+// the (large) ESPN summary down to only the fields we render and keep it in localStorage —
+// repeat visits and refreshes never re-download a finished match.
+const MD_KEY = id => "wcmd:" + id;
+const MD_STATS = new Set(["totalGoals","ownGoals","yellowCards","redCards","goalAssists","totalShots","shotsOnTarget","saves"]);
+function slimSummary(sum){
+  const g = sum.gameInfo || {};
+  return {
+    rosters: arr(sum.rosters).map(r=>({
+      homeAway: r.homeAway, formation: r.formation,
+      team: { displayName: (r.team||{}).displayName },
+      roster: arr(r.roster).map(p=>({
+        starter: p.starter, jersey: p.jersey, subbedIn: p.subbedIn,
+        position: { abbreviation: (p.position||{}).abbreviation },
+        athlete: { id: (p.athlete||{}).id, displayName: (p.athlete||{}).displayName },
+        stats: arr(p.stats).filter(s=>MD_STATS.has(s.name)).map(s=>({ name:s.name, value:s.value }))
+      }))
+    })),
+    keyEvents: arr(sum.keyEvents).filter(e=>/goal|card|subst|penalt/i.test(((e.type||{}).text)||"")).map(e=>({
+      type:{ text:(e.type||{}).text }, clock:{ displayValue:(e.clock||{}).displayValue }, team:{ displayName:(e.team||{}).displayName }
+    })),
+    boxscore: { teams: arr((sum.boxscore||{}).teams).map(t=>({
+      team:{ displayName:(t.team||{}).displayName },
+      statistics:arr(t.statistics).map(s=>({ name:s.name, displayValue:s.displayValue }))
+    })) },
+    gameInfo: { attendance: g.attendance,
+      officials: arr(g.officials).map(o=>({ displayName:o.displayName, position:{ displayName:(o.position||{}).displayName } })) }
+  };
+}
+function mdGet(id){ try{ const v = localStorage.getItem(MD_KEY(id)); return v ? JSON.parse(v) : null; }catch(_){ return null; } }
+function mdSet(id, obj){
+  let s; try{ s = JSON.stringify(obj); }catch(_){ return; }
+  try{ localStorage.setItem(MD_KEY(id), s); }
+  catch(_){   // quota exceeded -> evict some cached matches and retry once (best-effort)
+    try{ Object.keys(localStorage).filter(k=>k.indexOf("wcmd:")===0).slice(0,40).forEach(k=>localStorage.removeItem(k));
+         localStorage.setItem(MD_KEY(id), s); }catch(__){}
+  }
+}
+async function matchDetail(m){
+  if(m.status === "ft"){ const c = mdGet(m.id); if(c) return c; }   // immutable -> from cache
+  const sum = await espnSummary(m.id);
+  if(!sum) return null;
+  const slim = slimSummary(sum);
+  if(m.status === "ft") mdSet(m.id, slim);
+  return slim;
+}
+
 function tierOf(abbr){
   const a = String(abbr==null?"":abbr).toUpperCase();
   if(a==="G"||a==="GK") return 0;
@@ -476,11 +644,11 @@ function pchip(x){
 }
 
 function espnPitchHTML(sum){
-  const ros = sum.rosters || [];
+  const ros = arr(sum.rosters);
   const homeR = ros.find(r=>r.homeAway==="home") || ros[0];
   const awayR = ros.find(r=>r.homeAway==="away") || ros[1];
-  if(!homeR || !awayR || !(homeR.roster||[]).some(p=>p.starter)) return "";
-  const chips = pitchPlayers(awayR.roster,false).map(pchip).join("") + pitchPlayers(homeR.roster,true).map(pchip).join("");
+  if(!homeR || !awayR || !arr(homeR.roster).some(p=>p.starter)) return "";
+  const chips = pitchPlayers(arr(awayR.roster),false).map(pchip).join("") + pitchPlayers(arr(homeR.roster),true).map(pchip).join("");
   return `<div class="pitch">
     <div class="pitch-label top">${esc((awayR.team||{}).displayName)} · ${esc(awayR.formation)}</div>
     <div class="pitch-label bot">${esc((homeR.team||{}).displayName)} · ${esc(homeR.formation)}</div>
@@ -488,9 +656,9 @@ function espnPitchHTML(sum){
 }
 
 function espnSubsHTML(sum){
-  const ros = sum.rosters || []; if(ros.length<2) return "";
+  const ros = arr(sum.rosters); if(ros.length<2) return "";
   const col = r => {
-    const subs = (r.roster||[]).filter(p=>!p.starter);
+    const subs = arr(r.roster).filter(p=>!p.starter);
     const rows = subs.map(p=>`<div class="subrow"><span class="n">${esc(p.jersey)}</span><span>${esc((p.athlete||{}).displayName)}${p.subbedIn?' <span style="color:var(--accent)">▲</span>':''}</span></div>`).join("");
     return `<div class="subs"><h6>${esc((r.team||{}).displayName)} — bench</h6>${rows||'<div class="subrow" style="color:var(--muted)">—</div>'}</div>`;
   };
@@ -500,8 +668,8 @@ function espnSubsHTML(sum){
 const espnNum = d => { if(d==null) return 0; const n=parseFloat(String(d).replace(/[^0-9.\-]/g,"")); return isNaN(n)?0:n; };
 
 function espnStatsHTML(sum){
-  const teams = ((sum.boxscore||{}).teams)||[]; if(teams.length<2) return "";
-  const toMap = t => { const o={}; (t.statistics||[]).forEach(s=> o[s.name]={d:s.displayValue, n:espnNum(s.displayValue)}); return o; };
+  const teams = arr((sum.boxscore||{}).teams); if(teams.length<2) return "";
+  const toMap = t => { const o={}; arr(t.statistics).forEach(s=> o[s.name]={d:s.displayValue, n:espnNum(s.displayValue)}); return o; };
   const H=toMap(teams[0]), A=toMap(teams[1]);
   const order=[["possessionPct","Possession",true],["totalShots","Shots"],["shotsOnTarget","Shots on target"],
     ["wonCorners","Corners"],["foulsCommitted","Fouls"],["offsides","Offsides"],["totalPasses","Passes"],
@@ -534,7 +702,7 @@ function espnSectionHTML(sum){
   const stats = espnStatsHTML(sum);
   const gi = sum.gameInfo || {};
   const att = gi.attendance ? Number(gi.attendance).toLocaleString() : "";
-  const ref = ((gi.officials||[]).find(o=>(((o.position||{}).displayName)||"").toLowerCase().includes("referee"))||(gi.officials||[])[0]||{}).displayName || "";
+  const ref = (arr(gi.officials).find(o=>(((o.position||{}).displayName)||"").toLowerCase().includes("referee"))||arr(gi.officials)[0]||{}).displayName || "";
   let extra = "";
   if(att) extra += `<div class="detail-row"><span>Attendance</span><span>${att}</span></div>`;
   if(ref) extra += `<div class="detail-row"><span>Referee</span><span>${esc(ref)}</span></div>`;
@@ -554,7 +722,7 @@ async function loadEspnInto(m){
   const box = $("#espnBox"); if(!box) return;
   box.innerHTML = `<div class="espn-load">Loading lineups &amp; match stats…</div>`;
   try{
-    const sum = await espnSummary(m.id);
+    const sum = await matchDetail(m);
     if(!sum){ box.innerHTML = espnUnavail(); return; }
     const html = espnSectionHTML(sum);
     box.innerHTML = html || espnUnavail(m.status==="up" ? "Lineups are usually announced ~1 hour before kickoff." : "Detailed data isn't available for this match.");

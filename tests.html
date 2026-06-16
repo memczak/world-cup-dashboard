@@ -150,6 +150,63 @@ test("ESPN", "espnRosterPlayers extracts goals + cards with real names", ()=>{
   const p = espnRosterPlayers(sum)[0];
   eq(p.name, "Striker"); eq(p.team, "Mexico"); eq(p.goals, 2); eq(p.yc, 1);
 });
+test("Offline cache", "snapshot round-trips fixtures + groups + timestamp", ()=>{
+  FIXTURES = [{id:"x1",home:"Brazil",away:"Spain",hs:1,as:1,status:"ft",date:"2026-06-11T18:00Z"}];
+  GROUPS = [{letter:"A",teams:[{team:"Brazil",Pts:7}],matches:[]}];
+  TEAM_OF_GROUP = {Brazil:"A"}; TEAM_BADGE = {}; TEAMS = ["Brazil","Spain"]; LAST_UPDATED = 1700000000000;
+  saveSnapshot();
+  FIXTURES = []; GROUPS = []; TEAMS = []; LAST_UPDATED = 0; FROM_CACHE = false;
+  ok(loadSnapshot(), "snapshot loaded");
+  eq(FIXTURES.length, 1); eq(GROUPS[0].letter, "A"); eq(TEAMS.length, 2);
+  eq(LAST_UPDATED, 1700000000000); ok(FROM_CACHE, "flagged as served-from-cache");
+  localStorage.removeItem("wc:snapshot");
+});
+test("Offline cache", "match-detail cache (slimSummary + mdSet/mdGet) round-trips", ()=>{
+  const slim = slimSummary({ rosters:[{homeAway:"home",formation:"4-4-2",team:{displayName:"X"},roster:[]}],
+    keyEvents:[], boxscore:{teams:[]}, gameInfo:{attendance:100} });
+  ok(slim.rosters && slim.boxscore && slim.gameInfo, "slim keeps the same shape");
+  mdSet("EVT1", slim);
+  const back = mdGet("EVT1");
+  eq(back.rosters[0].team.displayName, "X"); eq(back.gameInfo.attendance, 100);
+  localStorage.removeItem("wcmd:EVT1");
+});
+test("Live refresh", "cadence is fast only while a match is live", ()=>{
+  FIXTURES = [{status:"ft"},{status:"up"}]; ok(!anyLive(), "none live"); eq(nextRefreshMs(), 180000);
+  FIXTURES = [{status:"live"}]; ok(anyLive(), "live detected"); eq(nextRefreshMs(), 30000);
+});
+test("Calendar", "icsForMatch builds a valid VEVENT", ()=>{
+  const ics = icsForMatch({id:"e1",home:"Germany",away:"France",date:"2026-06-11T18:00Z",venue:"Allianz",country:"Germany",stage:"Group E"});
+  ok(/BEGIN:VCALENDAR[\s\S]*BEGIN:VEVENT[\s\S]*END:VEVENT[\s\S]*END:VCALENDAR/.test(ics), "calendar structure");
+  ok(/DTSTART:20260611T180000Z/.test(ics), "UTC kickoff");
+  ok(/SUMMARY:Germany vs France \(Group E\)/.test(ics), "title with stage");
+  ok(ics.includes("\r\n"), "CRLF line endings (RFC 5545)");
+});
+test("Calendar", "icsForMatch unescapes HTML entities for plain-text calendars", ()=>{
+  const ics = icsForMatch({id:"e2",home:"C&#39;ote",away:"B",date:"2026-06-11T18:00Z"});
+  ok(ics.includes("C'ote"), "apostrophe entity restored");
+});
+const _m = (id,st,h,a)=>({id,home:"Brazil",away:"Spain",status:st,hs:h,as:a});
+test("Alerts", "first observation seeds state but never alerts", ()=>{
+  const r = computeAlerts([_m("1","live",0,0)], "Brazil", {});
+  eq(r.alerts.length, 0); eq(r.state["1"].score, "0-0");
+});
+test("Alerts", "a goal in a live fav match fires once", ()=>{
+  const seed = computeAlerts([_m("1","live",0,0)], "Brazil", {}).state;
+  const r = computeAlerts([_m("1","live",1,0)], "Brazil", seed);
+  eq(r.alerts.length, 1); ok(/GOAL/.test(r.alerts[0].title), "goal title");
+  const r2 = computeAlerts([_m("1","live",1,0)], "Brazil", r.state);
+  eq(r2.alerts.length, 0, "no repeat alert when score is unchanged");
+});
+test("Alerts", "kick-off (up->live) and full-time (live->ft) fire", ()=>{
+  const k = computeAlerts([_m("2","live",0,0)], "Brazil", computeAlerts([_m("2","up",null,null)],"Brazil",{}).state);
+  ok(/Kick-off/.test(k.alerts[0].title), "kickoff");
+  const f = computeAlerts([_m("3","ft",2,1)], "Brazil", computeAlerts([_m("3","live",2,1)],"Brazil",{}).state);
+  ok(/Full time/.test(f.alerts[0].title), "full time");
+});
+test("Alerts", "matches not involving the fav team are ignored", ()=>{
+  const r = computeAlerts([{id:"9",home:"France",away:"Italy",status:"live",hs:1,as:0}], "Brazil", {});
+  eq(r.alerts.length, 0); eq(Object.keys(r.state).length, 0);
+});
 
 /* ---- render results ---- */
 (function render(){
