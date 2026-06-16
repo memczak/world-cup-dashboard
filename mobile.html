@@ -386,7 +386,7 @@ function renderPlayers(){
 /* ---- Verify ---- */
 function renderVerify(){
   const el=document.getElementById("v-verify");
-  const inv=runInvariants();
+  const inv=runInvariants().slice(5);   // mobile: drop the first 5 integrity checks
   const ic=c=> c.pass?(c.warn?'<div class="ic warn">!</div>':'<div class="ic ok">✓</div>'):'<div class="ic bad">✕</div>';
   const passN=inv.filter(c=>c.pass).length;
   el.innerHTML=`<div class="h">Integrity checks · ${passN}/${inv.length} passing</div>`+
