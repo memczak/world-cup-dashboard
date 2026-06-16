@@ -50,11 +50,18 @@ function toDate(s){
 
 const TS = x => { const d = toDate(x); return d ? d.getTime() : 0; };
 
+// Escape any string before it goes into innerHTML. Data is escaped at the source
+// (normalizeEspn/loadStandings/espnRosterPlayers) and at render for raw ESPN summary
+// fields, so a hostile name from the feed can never inject markup.
+const ESC_MAP = { "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" };
+const esc = s => s==null ? "" : String(s).replace(/[&<>"']/g, c => ESC_MAP[c]);
+
 function crest(name, lg){
+  name = name==null ? "" : String(name);           // tolerate non-string input
   const b = TEAM_BADGE[name];
   const cls = "crest" + (lg ? " lg" : "");
-  if(b) return `<img class="${cls}" src="${b}" alt="" loading="lazy">`;
-  return `<span class="${cls} fallback">${(name||'?').replace(/[^A-Za-z]/g,'').slice(0,3).toUpperCase()}</span>`;
+  if(b) return `<img class="${cls}" src="${esc(b)}" alt="" loading="lazy">`;
+  return `<span class="${cls} fallback">${(name||"?").replace(/[^A-Za-z]/g,"").slice(0,3).toUpperCase()}</span>`;
 }
 
 const teamLabel = name => `<span class="tcell">${crest(name)}<span>${name}</span></span>`;
@@ -96,14 +103,14 @@ function normalizeEspn(ev){
   const st = STAGE[((ev.season||{}).slug)||""] || { label:"", ko:false, order:0 };
   return {
     id: ev.id, date: ev.date,
-    home: ((h.team||{}).displayName) || "", away: ((a.team||{}).displayName) || "",
+    home: esc((h.team||{}).displayName) || "", away: esc((a.team||{}).displayName) || "",
     hs: status==="up" ? null : num(h.score),
     as: status==="up" ? null : num(a.score),
     status,
-    venue: (comp.venue||{}).fullName || "",
-    country: ((comp.venue||{}).address||{}).country || "",
+    venue: esc((comp.venue||{}).fullName) || "",
+    country: esc(((comp.venue||{}).address||{}).country) || "",
     stage: st.label, knockout: st.ko, stageOrder: st.order,
-    homeBadge: (h.team||{}).logo || "", awayBadge: (a.team||{}).logo || ""
+    homeBadge: esc((h.team||{}).logo) || "", awayBadge: esc((a.team||{}).logo) || ""
   };
 }
 // official groups + live standings, straight from ESPN (no derivation, no rate limit)
@@ -113,11 +120,11 @@ async function loadStandings(){
   if(!ch.length) throw new Error("no standings");
   const tog = {};
   GROUPS = ch.map(c=>{
-    const letter = (c.name||"").replace(/^Group\s*/i,"").trim() || c.abbreviation || "?";
+    const letter = esc((c.name||"").replace(/^Group\s*/i,"").trim() || c.abbreviation || "?");
     const entries = ((c.standings||{}).entries) || [];
     const teams = entries.map(e=>{
       const st = {}; (e.stats||[]).forEach(s=> st[s.name] = s.value!=null ? s.value : parseFloat(s.displayValue));
-      const team = (e.team||{}).displayName;
+      const team = esc((e.team||{}).displayName);
       return { team, P:+st.gamesPlayed||0, W:+st.wins||0, D:+st.ties||0, L:+st.losses||0,
                GF:+st.pointsFor||0, GA:+st.pointsAgainst||0, Pts:+st.points||0, rank:+st.rank||0 };
     }).sort((x,y)=> (x.rank&&y.rank) ? x.rank-y.rank : (y.Pts-x.Pts) || ((y.GF-y.GA)-(x.GF-x.GA)) || (y.GF-x.GF));
@@ -144,15 +151,15 @@ async function loadData(){
 function espnRosterPlayers(sum){
   const out = [];
   (sum.rosters||[]).forEach(r=>{
-    const team = (r.team||{}).displayName;
+    const team = esc((r.team||{}).displayName);
     (r.roster||[]).forEach(p=>{
       const st = {}; (p.stats||[]).forEach(s=> st[s.name] = s.value);
       const ath = p.athlete || {};
       out.push({
-        id: ath.id, name: ath.displayName, team,
+        id: ath.id, name: esc(ath.displayName), team,
         goals:+st.totalGoals||0, og:+st.ownGoals||0, yc:+st.yellowCards||0, rc:+st.redCards||0,
         assists:+st.goalAssists||0, shots:+st.totalShots||0, sot:+st.shotsOnTarget||0, saves:+st.saves||0,
-        pos:(p.position||{}).abbreviation||"", num:p.jersey, starter:!!p.starter
+        pos:esc((p.position||{}).abbreviation)||"", num:p.jersey, starter:!!p.starter
       });
     });
   });
@@ -217,7 +224,10 @@ async function loadStats(){
     const sum = await espnSummary(m.id); if(!sum) return;
     (sum.keyEvents||[]).forEach(e=>{
       const t = ((e.type||{}).text||"").toLowerCase();
-      if(t.includes("goal")){
+      // ESPN labels: "Goal", "Goal - Header/Volley", "Own Goal", "Penalty - Scored".
+      // A penalty does NOT contain "goal", so also match a scored penalty.
+      const isGoal = /goal/.test(t) || (/penalt/.test(t) && /scored/.test(t));
+      if(isGoal){
         if(t.includes("own")) ownGoals++; else if(t.includes("pen")) pens++; else openPlay++;
         const mn = parseInt(((e.clock||{}).displayValue||""), 10);
         if(!isNaN(mn)) bands[Math.max(0, Math.min(5, Math.floor((mn-1)/15)))]++;
@@ -320,9 +330,9 @@ function playerView(p){
 function playerProfileHTML(bio, reg){
   bio = bio || {};
   const age = (typeof bio.age === "number") ? bio.age : ageFrom(bio.dateOfBirth);
-  const nat = (reg && reg.nat) || bio.citizenship || "";
+  const nat = (reg && reg.nat) || esc(bio.citizenship) || "";
   const fact = (k,v) => v ? `<div class="f"><div class="k">${k}</div><div class="v">${v}</div></div>` : "";
-  const bp = bio.birthPlace ? [bio.birthPlace.city, bio.birthPlace.country].filter(Boolean).join(", ") : "";
+  const bp = bio.birthPlace ? [esc(bio.birthPlace.city), esc(bio.birthPlace.country)].filter(Boolean).join(", ") : "";
   const wiki = (bio.links||[]).find(l => /wikipedia/i.test((l.rel||[]).join(" ") + " " + (l.href||"")));
   const tally = reg ? [
     reg.goals ? `${reg.goals} goal${reg.goals===1?"":"s"}` : "",
@@ -333,7 +343,7 @@ function playerProfileHTML(bio, reg){
     <div class="pm-hero">
       <span class="ph" style="display:flex;align-items:center;justify-content:center">${crest(nat)}</span>
       <div>
-        <div class="pn">${bio.displayName || (reg && reg.name) || "Player"}</div>
+        <div class="pn">${esc(bio.displayName) || (reg && reg.name) || "Player"}</div>
         <div class="ps">${crest(nat)}<span>${nat}</span>${reg && reg.goals ? ` · <span style="color:var(--accent)">${reg.goals} goal${reg.goals>1?"s":""} this tournament</span>` : ""}</div>
       </div>
     </div>
@@ -341,22 +351,23 @@ function playerProfileHTML(bio, reg){
       ${fact("Age", age!=null ? `${age} years` : "")}
       ${fact("Born", bio.dateOfBirth ? new Date(bio.dateOfBirth).toLocaleDateString([], {year:"numeric", month:"short", day:"numeric"}) : "")}
       ${fact("Birthplace", bp)}
-      ${fact("Nationality", bio.citizenship)}
+      ${fact("Nationality", esc(bio.citizenship))}
       ${fact("Position", reg && reg.pos)}
       ${fact("Shirt no.", reg && reg.num)}
-      ${fact("Height", bio.displayHeight)}
-      ${fact("Weight", bio.displayWeight)}
+      ${fact("Height", esc(bio.displayHeight))}
+      ${fact("Weight", esc(bio.displayWeight))}
     </div>
     ${tally ? `<div class="pm-bio">This tournament: ${tally}.</div>` : ""}
-    ${wiki ? `<div class="pm-links"><a href="${wiki.href}" target="_blank" rel="noopener">Wikipedia ↗</a></div>` : ""}`;
+    ${wiki ? `<div class="pm-links"><a href="${esc(wiki.href)}" target="_blank" rel="noopener">Wikipedia ↗</a></div>` : ""}`;
 }
 
 function runInvariants(){
   const out = [];
-  const groupsOK = GROUPS.length===12 && GROUPS.every(g=>g.teams.length===4);
-  out.push({ pass:groupsOK, name:"Group structure", detail:`${GROUPS.length} groups, sizes ${[...new Set(GROUPS.map(g=>g.teams.length))].join("/")||"-"} (expected 12 × 4)` });
+  const sizeOf = g => Array.isArray(g.teams) ? g.teams.length : -1;   // tolerate malformed groups
+  const groupsOK = GROUPS.length===12 && GROUPS.every(g=>sizeOf(g)===4);
+  out.push({ pass:groupsOK, name:"Group structure", detail:`${GROUPS.length} groups, sizes ${[...new Set(GROUPS.map(sizeOf))].join("/")||"-"} (expected 12 × 4)` });
 
-  const rows = GROUPS.flatMap(g=>g.teams);
+  const rows = GROUPS.flatMap(g=>Array.isArray(g.teams)?g.teams:[]);
   const bad = rows.filter(t=> t.Pts !== 3*t.W + t.D || t.P !== t.W + t.D + t.L);
   out.push({ pass:bad.length===0, name:"Standings math: Pts = 3·W + D, P = W+D+L", detail: bad.length ? `${bad.length} violation(s): ${bad.slice(0,3).map(t=>t.team).join(", ")}` : `all ${rows.length} team rows internally consistent` });
 
@@ -405,7 +416,7 @@ const ESPN_ALIAS = {
   capeverde:"caboverde", caboverde:"capeverde", turkey:"turkiye", turkiye:"turkey", drcongo:"congodr", congodr:"drcongo"
 };
 
-const espnNorm = s => (s||"").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[^a-z0-9]/g,"");
+const espnNorm = s => String(s==null?"":s).toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g,"").replace(/[^a-z0-9]/g,"");
 
 function teamsMatch(a,b){
   const na=espnNorm(a), nb=espnNorm(b);
@@ -426,7 +437,7 @@ async function espnSummary(id){
 }
 
 function tierOf(abbr){
-  const a = (abbr||"").toUpperCase();
+  const a = String(abbr==null?"":abbr).toUpperCase();
   if(a==="G"||a==="GK") return 0;
   if(/(^F|CF|ST|^S|LW|RW|^W|FW)/.test(a)) return 5;
   if(a.includes("AM")) return 4;
@@ -460,8 +471,8 @@ function pitchPlayers(roster, isHome){
 }
 
 function pchip(x){
-  const name = ((x.p.athlete||{}).displayName||"").split(" ").slice(-1)[0];
-  return `<div class="pchip ${x.isHome?'h':'a'}" style="left:${x.left}%;top:${x.top}%"><span class="num">${x.p.jersey||""}</span><span class="nm">${name}</span></div>`;
+  const name = esc(((x.p.athlete||{}).displayName||"").split(" ").slice(-1)[0]);
+  return `<div class="pchip ${x.isHome?'h':'a'}" style="left:${x.left}%;top:${x.top}%"><span class="num">${esc(x.p.jersey)}</span><span class="nm">${name}</span></div>`;
 }
 
 function espnPitchHTML(sum){
@@ -471,8 +482,8 @@ function espnPitchHTML(sum){
   if(!homeR || !awayR || !(homeR.roster||[]).some(p=>p.starter)) return "";
   const chips = pitchPlayers(awayR.roster,false).map(pchip).join("") + pitchPlayers(homeR.roster,true).map(pchip).join("");
   return `<div class="pitch">
-    <div class="pitch-label top">${(awayR.team||{}).displayName||""} · ${awayR.formation||""}</div>
-    <div class="pitch-label bot">${(homeR.team||{}).displayName||""} · ${homeR.formation||""}</div>
+    <div class="pitch-label top">${esc((awayR.team||{}).displayName)} · ${esc(awayR.formation)}</div>
+    <div class="pitch-label bot">${esc((homeR.team||{}).displayName)} · ${esc(homeR.formation)}</div>
     ${chips}</div>`;
 }
 
@@ -480,8 +491,8 @@ function espnSubsHTML(sum){
   const ros = sum.rosters || []; if(ros.length<2) return "";
   const col = r => {
     const subs = (r.roster||[]).filter(p=>!p.starter);
-    const rows = subs.map(p=>`<div class="subrow"><span class="n">${p.jersey||""}</span><span>${(p.athlete||{}).displayName||""}${p.subbedIn?' <span style="color:var(--accent)">▲</span>':''}</span></div>`).join("");
-    return `<div class="subs"><h6>${(r.team||{}).displayName||""} — bench</h6>${rows||'<div class="subrow" style="color:var(--muted)">—</div>'}</div>`;
+    const rows = subs.map(p=>`<div class="subrow"><span class="n">${esc(p.jersey)}</span><span>${esc((p.athlete||{}).displayName)}${p.subbedIn?' <span style="color:var(--accent)">▲</span>':''}</span></div>`).join("");
+    return `<div class="subs"><h6>${esc((r.team||{}).displayName)} — bench</h6>${rows||'<div class="subrow" style="color:var(--muted)">—</div>'}</div>`;
   };
   return `<div class="lineup-cols">${col(ros[0])}${col(ros[1])}</div>`;
 }
@@ -498,14 +509,14 @@ function espnStatsHTML(sum){
   const rows = order.filter(([k])=>H[k]||A[k]).map(([k,label,pct])=>{
     const h=H[k]||{d:"0",n:0}, a=A[k]||{d:"0",n:0};
     const tot=h.n+a.n||1, hp=Math.round(h.n/tot*100), ap=100-hp;
-    const fmt=v=> pct ? (String(v).includes("%")?v:v+"%") : v;
+    const fmt=v=>{ v=esc(v); return pct ? (String(v).includes("%")?v:v+"%") : v; };
     return `<div class="sblock"><div class="slabel">${label}</div>
       <div class="sbar"><span class="hv">${fmt(h.d)}</span>
         <span class="track"><span class="th" style="width:${hp}%"></span><span class="ta" style="width:${ap}%"></span></span>
         <span class="av">${fmt(a.d)}</span></div></div>`;
   }).join("");
   if(!rows) return "";
-  const hN=(teams[0].team||{}).displayName||"Home", aN=(teams[1].team||{}).displayName||"Away";
+  const hN=esc((teams[0].team||{}).displayName)||"Home", aN=esc((teams[1].team||{}).displayName)||"Away";
   return `<div class="stat-legend"><span><i style="background:#0bb88f"></i>${hN}</span><span>${aN}<i style="background:#3a6df0"></i></span></div>${rows}`;
 }
 
@@ -526,7 +537,7 @@ function espnSectionHTML(sum){
   const ref = ((gi.officials||[]).find(o=>(((o.position||{}).displayName)||"").toLowerCase().includes("referee"))||(gi.officials||[])[0]||{}).displayName || "";
   let extra = "";
   if(att) extra += `<div class="detail-row"><span>Attendance</span><span>${att}</span></div>`;
-  if(ref) extra += `<div class="detail-row"><span>Referee</span><span>${ref}</span></div>`;
+  if(ref) extra += `<div class="detail-row"><span>Referee</span><span>${esc(ref)}</span></div>`;
   let html = "";
   if(goals) html += goals;
   if(pitch) html += `<h5>👥 Lineups</h5>${pitch}${subs}`;
