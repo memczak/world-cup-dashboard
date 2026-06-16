@@ -3,7 +3,7 @@
    so code updates are picked up immediately and the html/js set always stays
    consistent (no stale "new index.html + old app.js" mismatch). The cache is an
    offline fallback only. API responses are NEVER cached — live data is always fresh. */
-const CACHE = "wc2026-v12";
+const CACHE = "wc2026-v13";
 const SHELL = ["./", "./index.html", "./mobile.html", "./wc-engine.js", "./app.js", "./app.mobile.js", "./manifest.webmanifest", "./icon-180.png", "./icon-192.png", "./icon-512.png", "./ball.png"];
 
 self.addEventListener("install", e => {

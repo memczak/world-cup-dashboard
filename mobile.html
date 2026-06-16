@@ -144,8 +144,8 @@
   .score-big{display:flex;align-items:center;justify-content:center;gap:18px;font-size:30px;font-weight:800;margin:2px 0 14px;font-variant-numeric:tabular-nums;}
   .score-big .t{display:flex;flex-direction:column;align-items:center;gap:6px;font-size:13px;font-weight:600;text-align:center;}
   .score-big .t .crest{width:36px;height:26px;} .score-big .vs{color:var(--muted);font-size:17px;}
-  .drow{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--line);font-size:13px;color:var(--muted);}
-  .drow span:last-child{color:var(--text);text-align:right;}
+  .drow,.detail-row{display:flex;justify-content:space-between;gap:12px;padding:9px 0;border-top:1px solid var(--line);font-size:13px;color:var(--muted);}
+  .drow span:last-child,.detail-row span:last-child{color:var(--text);text-align:right;}
   .plink{color:var(--accent);}
   /* reused ESPN pitch/stat classes (engine returns this markup) */
   .espn-sec h5{margin:16px 0 6px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;}
@@ -156,10 +156,10 @@
   .pitch::after{content:"";position:absolute;left:50%;top:50%;width:80px;height:80px;border:2px solid rgba(255,255,255,.3);border-radius:50%;transform:translate(-50%,-50%);}
   .pitch-label{position:absolute;left:10px;font-size:11px;font-weight:700;color:rgba(255,255,255,.92);text-transform:uppercase;letter-spacing:.5px;z-index:2;text-shadow:0 1px 2px rgba(0,0,0,.5);}
   .pitch-label.top{top:8px;} .pitch-label.bot{bottom:8px;}
-  .pchip{position:absolute;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:2px;width:56px;z-index:3;}
+  .pchip{position:absolute;transform:translate(-50%,-50%);display:flex;flex-direction:column;align-items:center;gap:3px;width:62px;z-index:3;}
   .pchip .num{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#fff;border:2px solid rgba(255,255,255,.85);}
   .pchip.h .num{background:#0bb88f;} .pchip.a .num{background:#3a6df0;}
-  .pchip .nm{font-size:9px;font-weight:600;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.7);white-space:nowrap;max-width:58px;overflow:hidden;text-overflow:ellipsis;text-align:center;}
+  .pchip .nm{font-size:11px;font-weight:600;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.7);white-space:nowrap;max-width:66px;overflow:hidden;text-overflow:ellipsis;text-align:center;}
   .lineup-cols{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:6px 0;}
   .subs h6{margin:0 0 6px;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;}
   .subrow{font-size:12px;padding:3px 0;display:flex;gap:7px;} .subrow .n{color:var(--muted);min-width:20px;text-align:right;}
