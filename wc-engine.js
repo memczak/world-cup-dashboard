@@ -68,11 +68,15 @@ function crest(name, lg){
 const teamLabel = name => `<span class="tcell">${crest(name)}<span>${name}</span></span>`;
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
+const FETCH_TIMEOUT_MS = 12000;   // abort a stalled request so a hung network can't freeze the refresh loop
 async function getJSON(url, _try){
   _try = _try || 0;
   let r;
-  try { r = await fetch(url, { cache: "no-store" }); }
+  const ctrl = new AbortController();
+  const timer = setTimeout(()=> ctrl.abort(), FETCH_TIMEOUT_MS);
+  try { r = await fetch(url, { cache: "no-store", signal: ctrl.signal }); }
   catch(e){ if(_try < 2){ await sleep(1200*(_try+1)); return getJSON(url, _try+1); } throw e; }
+  finally { clearTimeout(timer); }
   if(r.status === 429){
     if(_try < 3){ await sleep(2000*(_try+1)); return getJSON(url, _try+1); }
     throw new Error("rate-limited by data provider (429)");

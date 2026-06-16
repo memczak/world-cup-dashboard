@@ -41,7 +41,7 @@ function renderStats(){
       tile(S.cleanSheets, "Clean sheets"),
       tile(`${S.decisive} / ${S.draws}`, "Decisive / Draws"),
       tile(`${tot.Y} / ${tot.R}`, "Yellow / Red cards"),
-      tile(S.pens, "Penalties scored")
+      tile(S.pens, "Penalty goals")
     ].join("");
     if(S.biggest) tiles += tile(`${S.biggest.m.hs}–${S.biggest.m.as}`, "Biggest win", `${S.biggest.m.home} v ${S.biggest.m.away}`);
     if(S.highest) tiles += tile(`${S.highest.tot} goals`, "Highest-scoring", `${S.highest.m.home} ${S.highest.m.hs}–${S.highest.m.as} ${S.highest.m.away}`);
@@ -54,7 +54,7 @@ function renderStats(){
   if(S.openPlay+S.pens+S.ownGoals>0){
     const labs=["1-15","16-30","31-45","46-60","61-75","76-90+"], max=Math.max(1,...S.bands);
     const bars=`<div class="minute-bars">${S.bands.map((n,i)=>`<div class="mb"><span class="num">${n}</span><div class="bar" style="height:${Math.round(n/max*100)}%"></div><span class="lab">${labs[i]}</span></div>`).join("")}</div>`;
-    const types=barlist([{label:"Open play",val:S.openPlay},{label:"Penalty",val:S.pens},{label:"Own goal",val:S.ownGoals}]);
+    const types=barlist([{label:"Open play",val:S.openPlay},{label:"Penalty goal",val:S.pens},{label:"Own goal",val:S.ownGoals}]);
     out.push(section("Goals by minute & type", "From real match timelines (reflects what the feed has logged so far)",
       `<div class="stat-cols"><div class="card">${bars}</div><div class="card">${types}</div></div>`));
   }

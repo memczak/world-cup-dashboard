@@ -1,7 +1,7 @@
 /* World Cup 2026 — service worker.
    Caches the app shell for offline launch. NEVER caches API responses,
    so live data (scores, lineups, stats) is always fetched fresh. */
-const CACHE = "wc2026-v8";
+const CACHE = "wc2026-v10";
 const SHELL = ["./", "./index.html", "./mobile.html", "./wc-engine.js", "./app.js", "./app.mobile.js", "./manifest.webmanifest", "./icon-180.png", "./icon-192.png", "./icon-512.png", "./ball.png"];
 
 self.addEventListener("install", e => {

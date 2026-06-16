@@ -175,7 +175,7 @@ function renderStats(){
       <div class="tile"><b>${S.played}</b><span>Matches played</span></div>
       <div class="tile"><b>${S.goals}</b><span>Goals · ${(S.goals/S.played).toFixed(2)}/match</span></div>
       <div class="tile"><b>${S.cleanSheets}</b><span>Clean sheets</span></div>
-      <div class="tile"><b>${S.pens}</b><span>Penalties</span></div></div>`;
+      <div class="tile"><b>${S.pens}</b><span>Penalty goals</span></div></div>`;
   }else html+=`<div class="empty" style="margin-bottom:16px">Fills in as matches are played.</div>`;
   html+=`<div class="h">Golden Boot</div>`;
   if(SCORERS&&SCORERS.length){
